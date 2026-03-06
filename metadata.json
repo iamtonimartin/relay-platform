@@ -1,0 +1,5 @@
+{
+  "name": "Relay Platform",
+  "description": "Bespoke AI chatbot management platform for creating, training, and deploying custom Relay assistants.",
+  "requestFramePermissions": []
+}

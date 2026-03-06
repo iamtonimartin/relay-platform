@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Background: bg-teal-500 (#14b8a6), rounded-lg = 8px radius -->
+  <rect width="32" height="32" rx="8" fill="#14b8a6"/>
+  <!-- MessageSquare as outline stroke, matching Lucide's stroke="currentColor" fill="none" -->
+  <path
+    transform="translate(6,6) scale(0.833)"
+    d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+    fill="none"
+    stroke="white"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
