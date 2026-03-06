@@ -20,7 +20,6 @@
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.4.1",
     "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -40,8 +39,8 @@
     "react-router-dom": "^7.13.1",
     "recharts": "^3.7.0",
     "tailwind-merge": "^3.5.0",
-    "uuid": "^13.0.0",
     "tsx": "^4.21.0",
+    "uuid": "^13.0.0",
     "vite": "^6.2.0"
   },
   "devDependencies": {
