@@ -1718,7 +1718,7 @@ async function startServer() {
     const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
     const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
     const scope = channel === "instagram"
-      ? "pages_messaging,pages_show_list,instagram_manage_messages,business_management"
+      ? "pages_show_list,instagram_business_basic,instagram_business_manage_messages,business_management"
       : "pages_messaging,pages_show_list,business_management";
 
     res.redirect(
