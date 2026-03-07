@@ -188,6 +188,12 @@ export const api = {
     return res.json();
   },
 
+  async getAssistantAnalytics(id: string): Promise<AnalyticsData> {
+    const res = await apiFetch(`${API_BASE}/assistants/${id}/analytics`);
+    if (!res.ok) throw new Error('Failed to fetch assistant analytics');
+    return res.json();
+  },
+
   async getConversations(): Promise<ConversationSummary[]> {
     const res = await apiFetch(`${API_BASE}/conversations`);
     if (!res.ok) throw new Error('Failed to fetch conversations');

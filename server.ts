@@ -1498,6 +1498,160 @@ async function startServer() {
   // Analytics — real data from Supabase (Phase 8)
   // ---------------------------------------------------------------------------
 
+  // Per-assistant analytics — same shape as global analytics but scoped to one assistant
+  app.get("/api/assistants/:id/analytics", async (req, res) => {
+    try {
+      const assistantId = req.params.id;
+
+      // Get all conversation IDs for this assistant (used to filter message queries)
+      const { data: convRows } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("assistant_id", assistantId);
+      const convIds = (convRows ?? []).map((r: any) => r.id);
+
+      const total = convIds.length;
+
+      // Messages sent (user + assistant) within this assistant's conversations
+      const { count: messagesSent } = convIds.length
+        ? await supabase
+            .from("messages")
+            .select("*", { count: "exact", head: true })
+            .in("conversation_id", convIds)
+            .in("role", ["user", "assistant"])
+        : { count: 0 };
+
+      // Handoff rate
+      const { count: handoffCount } = await supabase
+        .from("conversations")
+        .select("*", { count: "exact", head: true })
+        .eq("assistant_id", assistantId)
+        .eq("status", "handed_off");
+
+      // Fallback rate
+      const { count: totalAssistantMessages } = convIds.length
+        ? await supabase
+            .from("messages")
+            .select("*", { count: "exact", head: true })
+            .in("conversation_id", convIds)
+            .eq("role", "assistant")
+        : { count: 0 };
+
+      const { count: fallbackCount } = convIds.length
+        ? await supabase
+            .from("messages")
+            .select("*", { count: "exact", head: true })
+            .in("conversation_id", convIds)
+            .eq("role", "assistant")
+            .eq("is_fallback", true)
+        : { count: 0 };
+
+      const handoffRate =
+        total > 0 ? Math.round(((handoffCount ?? 0) / total) * 1000) / 10 : 0;
+      const totalAsst = totalAssistantMessages ?? 0;
+      const fallbackRate =
+        totalAsst > 0 ? Math.round(((fallbackCount ?? 0) / totalAsst) * 1000) / 10 : 0;
+
+      // Lead capture rate
+      const { count: leadCount } = await supabase
+        .from("conversations")
+        .select("*", { count: "exact", head: true })
+        .eq("assistant_id", assistantId)
+        .or("user_name.not.is.null,user_email.not.is.null");
+      const leadCaptureRate =
+        total > 0 ? Math.round(((leadCount ?? 0) / total) * 1000) / 10 : 0;
+
+      // Top questions (last 1000 user messages for this assistant)
+      const { data: userMessages } = convIds.length
+        ? await supabase
+            .from("messages")
+            .select("content")
+            .in("conversation_id", convIds)
+            .eq("role", "user")
+            .order("created_at", { ascending: false })
+            .limit(1000)
+        : { data: [] };
+
+      const questionCounts: Record<string, number> = {};
+      for (const msg of userMessages ?? []) {
+        const q = msg.content.trim();
+        if (q.length < 200) {
+          questionCounts[q] = (questionCounts[q] || 0) + 1;
+        }
+      }
+      const topQuestions = Object.entries(questionCounts)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 5)
+        .map(([question, count]) => ({ question, count }));
+
+      // Conversations over time — last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+      thirtyDaysAgo.setHours(0, 0, 0, 0);
+
+      const { data: recentConvs } = await supabase
+        .from("conversations")
+        .select("created_at")
+        .eq("assistant_id", assistantId)
+        .gte("created_at", thirtyDaysAgo.toISOString());
+
+      const dateCounts: Record<string, number> = {};
+      for (const conv of recentConvs ?? []) {
+        const date = conv.created_at.split("T")[0];
+        dateCounts[date] = (dateCounts[date] || 0) + 1;
+      }
+      const conversationsOverTime: { date: string; count: number }[] = [];
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split("T")[0];
+        conversationsOverTime.push({ date: dateStr, count: dateCounts[dateStr] || 0 });
+      }
+
+      // Busiest hours — fetch conversation IDs from last 30 days, then look up their messages
+      const { data: recentConvsFull } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("assistant_id", assistantId)
+        .gte("created_at", thirtyDaysAgo.toISOString());
+      const recentIds = (recentConvsFull ?? []).map((c: any) => c.id);
+
+      const { data: recentMessages } = recentIds.length
+        ? await supabase
+            .from("messages")
+            .select("created_at")
+            .in("conversation_id", recentIds)
+            .eq("role", "user")
+        : { data: [] };
+
+      const hourCounts: Record<number, number> = {};
+      for (let h = 0; h < 24; h++) hourCounts[h] = 0;
+      for (const msg of recentMessages ?? []) {
+        const hour = new Date(msg.created_at).getHours();
+        hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+      }
+      const busiestHours = Object.entries(hourCounts).map(([hour, count]) => ({
+        hour: parseInt(hour),
+        label: `${String(parseInt(hour)).padStart(2, "0")}:00`,
+        count,
+      }));
+
+      res.json({
+        totalConversations: total,
+        messagesSent: messagesSent ?? 0,
+        handoffRate,
+        fallbackRate,
+        leadCaptureRate,
+        topQuestions,
+        conversationsOverTime,
+        busiestHours,
+      });
+    } catch (err: any) {
+      console.error("Assistant analytics error:", err);
+      res.status(500).json({ error: err?.message || "Failed to fetch analytics" });
+    }
+  });
+
   app.get("/api/analytics", async (_req, res) => {
     try {
       // Total conversations (all time)

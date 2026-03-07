@@ -341,7 +341,7 @@ export default function Assistants() {
                     Test
                   </button>
                   <button
-                    onClick={() => navigate('/')}
+                    onClick={() => navigate(`/assistants/${assistant.id}?tab=analytics`)}
                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors"
                   >
                     <BarChart2 className="w-3.5 h-3.5" />

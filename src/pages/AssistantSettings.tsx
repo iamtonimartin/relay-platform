@@ -36,9 +36,13 @@ import {
   WifiOff,
   Eye,
   ThumbsDown,
+  BarChart2,
 } from 'lucide-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar,
+} from 'recharts';
 import { api, getToken } from '../services/api';
-import { Assistant, KnowledgeEntry } from '../types';
+import { Assistant, KnowledgeEntry, AnalyticsData } from '../types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -51,6 +55,7 @@ const tabs = [
   { id: 'knowledge', label: 'Knowledge Base', icon: Database },
   { id: 'model', label: 'Model Settings', icon: Cpu },
   { id: 'preview', label: 'Preview', icon: Play },
+  { id: 'analytics', label: 'Analytics', icon: BarChart2 },
   { id: 'channels', label: 'Channels', icon: Globe },
   { id: 'hours', label: 'Hours of Operation', icon: Clock },
   { id: 'handoff', label: 'Handoff Rules', icon: UserCheck },
@@ -109,6 +114,11 @@ export default function AssistantSettings() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Analytics tab state
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
   // Embed code copy state
   const [copied, setCopied] = useState(false);
@@ -195,6 +205,27 @@ export default function AssistantSettings() {
       loadChannels();
     }
   }, [activeTab, id]);
+
+  // Load analytics whenever the user switches to the Analytics tab
+  useEffect(() => {
+    if (activeTab === 'analytics' && id && !analyticsData) {
+      loadAnalytics();
+    }
+  }, [activeTab, id]);
+
+  const loadAnalytics = async () => {
+    if (!id) return;
+    setAnalyticsLoading(true);
+    setAnalyticsError(null);
+    try {
+      const data = await api.getAssistantAnalytics(id);
+      setAnalyticsData(data);
+    } catch (err: any) {
+      setAnalyticsError(err?.message || 'Failed to load analytics');
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
 
   const loadChannels = async () => {
     if (!id) return;
@@ -1859,6 +1890,140 @@ export default function AssistantSettings() {
                     <p className="text-xs text-slate-400">
                       Quick replies appear as tap buttons at the start of the conversation. Limit to 4-5 for the best experience.
                     </p>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Analytics tab */}
+            {activeTab === 'analytics' && (() => {
+              const data = analyticsData;
+              const chartData = (data?.conversationsOverTime ?? []).map(d => ({
+                date: new Date(d.date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+                count: d.count,
+              }));
+              const topQuestions = data?.topQuestions ?? [];
+              const maxQ = topQuestions[0]?.count ?? 1;
+              const stats = data
+                ? [
+                    { label: 'Total Conversations', value: data.totalConversations.toLocaleString('en-GB') },
+                    { label: 'Messages Sent', value: data.messagesSent.toLocaleString('en-GB') },
+                    { label: 'Handoff Rate', value: `${data.handoffRate}%` },
+                    { label: 'Fallback Rate', value: `${data.fallbackRate}%` },
+                    { label: 'Lead Capture Rate', value: `${data.leadCaptureRate ?? 0}%` },
+                  ]
+                : [];
+
+              return (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">Analytics</h3>
+                      <p className="text-sm text-slate-500 mt-1">Performance data for this assistant over the last 30 days.</p>
+                    </div>
+                    <button
+                      onClick={() => { setAnalyticsData(null); loadAnalytics(); }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${analyticsLoading ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {analyticsError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-4 py-3 text-sm">
+                      {analyticsError}
+                    </div>
+                  )}
+
+                  {/* Stat cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                    {analyticsLoading
+                      ? Array.from({ length: 5 }).map((_, i) => (
+                          <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-200 animate-pulse">
+                            <div className="h-2.5 bg-slate-200 rounded w-2/3 mb-3" />
+                            <div className="h-7 bg-slate-200 rounded w-1/2" />
+                          </div>
+                        ))
+                      : stats.map(stat => (
+                          <div key={stat.label} className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-tight">{stat.label}</p>
+                            <p className="text-2xl font-bold text-slate-900 mt-2">{stat.value}</p>
+                          </div>
+                        ))}
+                  </div>
+
+                  {/* Conversations over time */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-6">
+                    <h4 className="text-sm font-semibold text-slate-700 mb-4">Conversations Over Time</h4>
+                    <div className="h-56">
+                      {analyticsLoading ? (
+                        <div className="h-full bg-slate-50 rounded-xl animate-pulse" />
+                      ) : (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8' }} dy={8} interval={4} />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8' }} allowDecimals={false} />
+                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                            <Line type="monotone" dataKey="count" stroke="#0d9488" strokeWidth={2.5} dot={{ r: 2.5, fill: '#0d9488', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 4, strokeWidth: 0 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Top questions */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-6">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-4">Top Questions</h4>
+                      {analyticsLoading ? (
+                        <div className="space-y-4">
+                          {Array.from({ length: 4 }).map((_, i) => (
+                            <div key={i} className="space-y-1.5 animate-pulse">
+                              <div className="h-3 bg-slate-100 rounded w-full" />
+                              <div className="h-1.5 bg-slate-100 rounded w-full" />
+                            </div>
+                          ))}
+                        </div>
+                      ) : topQuestions.length === 0 ? (
+                        <p className="text-sm text-slate-400 text-center py-6">No questions yet. Start a conversation to see data here.</p>
+                      ) : (
+                        <div className="space-y-4">
+                          {topQuestions.map((item, idx) => (
+                            <div key={idx} className="space-y-1.5">
+                              <div className="flex items-start justify-between text-sm gap-3">
+                                <span className="font-medium text-slate-700 leading-snug line-clamp-2">{item.question}</span>
+                                <span className="text-slate-400 font-bold shrink-0">{item.count}</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div className="h-full bg-teal-500 rounded-full" style={{ width: `${(item.count / maxQ) * 100}%` }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Busiest hours */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-6">
+                      <h4 className="text-sm font-semibold text-slate-700 mb-4">Busiest Hours</h4>
+                      <div className="h-48">
+                        {analyticsLoading ? (
+                          <div className="h-full bg-slate-50 rounded-xl animate-pulse" />
+                        ) : (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={data?.busiestHours ?? []} barSize={6}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                              <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} interval={2} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8' }} allowDecimals={false} />
+                              <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                              <Bar dataKey="count" fill="#0d9488" radius={[3, 3, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
