@@ -1926,17 +1926,21 @@ async function startServer() {
     res.sendStatus(200);
 
     try {
-      // Verify X-Hub-Signature-256 header using the raw body captured before JSON parsing
+      // Verify X-Hub-Signature-256 header using the raw body captured before JSON parsing.
+      // Facebook webhooks are signed with meta_app_secret; Instagram webhooks with instagram_app_secret.
       const sig = (req.headers["x-hub-signature-256"] as string) ?? "";
-      const { data: secretRow } = await supabase
-        .from("platform_settings")
-        .select("value")
-        .eq("key", "meta_app_secret")
-        .single();
-      if (secretRow?.value && sig && req.rawBody) {
+      if (sig && req.rawBody) {
+        const { data: secrets } = await supabase
+          .from("platform_settings")
+          .select("key, value")
+          .in("key", ["meta_app_secret", "instagram_app_secret"]);
+        const secretMap = Object.fromEntries((secrets ?? []).map((s: any) => [s.key, s.value]));
         const { createHmac } = await import("crypto");
-        const expected = "sha256=" + createHmac("sha256", secretRow.value).update(req.rawBody).digest("hex");
-        if (sig !== expected) {
+        const validSecrets = [secretMap.meta_app_secret, secretMap.instagram_app_secret].filter(Boolean);
+        const signatureValid = validSecrets.some(
+          secret => "sha256=" + createHmac("sha256", secret).update(req.rawBody).digest("hex") === sig
+        );
+        if (!signatureValid) {
           console.warn("Meta webhook signature mismatch — ignoring");
           return;
         }
