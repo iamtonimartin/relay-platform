@@ -1957,6 +1957,7 @@ async function startServer() {
 
       const payload = req.body;
       const object: string = payload.object; // "page" | "instagram" | "whatsapp_business_account"
+      console.log("[webhook] full payload:", JSON.stringify(payload));
 
       for (const entry of payload.entry ?? []) {
         if (object === "page" || object === "instagram") {
@@ -1967,6 +1968,7 @@ async function startServer() {
           for (const event of entry.messaging ?? []) {
             const senderId: string = event.sender?.id;
             const text: string | undefined = event.message?.text;
+            console.log("[webhook] event - pageId:", pageId, "senderId:", senderId, "text:", text, "is_echo:", event.message?.is_echo);
             if (!text || !senderId || senderId === pageId) continue; // ignore echo messages
 
             await handleMetaMessage({ channel, pageId, senderId, text });
