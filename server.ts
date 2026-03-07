@@ -1801,6 +1801,14 @@ async function startServer() {
         console.log("[ig/callback] me:", JSON.stringify(meData));
         if (meData.error) throw new Error(meData.error.message);
 
+        // Subscribe this Instagram account to webhook events so real DMs are delivered
+        const subResp = await fetch(
+          `https://graph.instagram.com/v20.0/${meData.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,messaging_seen&access_token=${longData.access_token}`,
+          { method: "POST" }
+        );
+        const subData: any = await subResp.json();
+        console.log("[ig/callback] subscription:", JSON.stringify(subData));
+
         // Store the connection — page_id holds the Instagram Business Account ID
         await supabase.from("channel_connections").upsert({
           assistant_id: assistantId,
