@@ -1713,8 +1713,8 @@ async function startServer() {
     const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
     const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
     const scope = channel === "instagram"
-      ? "pages_messaging,pages_show_list,instagram_manage_messages,instagram_basic"
-      : "pages_messaging,pages_show_list";
+      ? "pages_messaging,pages_show_list,instagram_manage_messages,instagram_basic,business_management"
+      : "pages_messaging,pages_show_list,business_management";
 
     res.redirect(
       `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code`
@@ -1766,14 +1766,42 @@ async function startServer() {
       const longData: any = await longResp.json();
       if (longData.error) throw new Error(longData.error.message);
 
-      // Get all pages this user manages (each page gets its own non-expiring token)
+      // Log who the token belongs to for debugging
+      const meResp = await fetch(`https://graph.facebook.com/v19.0/me?access_token=${longData.access_token}&fields=id,name`);
+      const meData: any = await meResp.json();
+      console.log("[meta/callback] me:", JSON.stringify(meData));
+
+      // Get all pages this user manages directly (each page gets its own non-expiring token)
       const pagesResp = await fetch(
         `https://graph.facebook.com/v19.0/me/accounts?access_token=${longData.access_token}&fields=id,name,access_token`
       );
       const pagesData: any = await pagesResp.json();
       console.log("[meta/callback] pages response:", JSON.stringify(pagesData));
       if (pagesData.error) throw new Error(pagesData.error.message);
-      const pages: { id: string; name: string; access_token: string }[] = pagesData.data ?? [];
+      let pages: { id: string; name: string; access_token: string }[] = pagesData.data ?? [];
+
+      // Fallback: if no pages found via me/accounts, try fetching via Business Manager
+      // (pages managed through Meta Business Suite don't appear in me/accounts)
+      if (pages.length === 0) {
+        const bizResp = await fetch(
+          `https://graph.facebook.com/v19.0/me/businesses?access_token=${longData.access_token}&fields=id,name`
+        );
+        const bizData: any = await bizResp.json();
+        console.log("[meta/callback] businesses response:", JSON.stringify(bizData));
+
+        if (!bizData.error && bizData.data?.length > 0) {
+          for (const biz of bizData.data) {
+            const bpResp = await fetch(
+              `https://graph.facebook.com/v19.0/${biz.id}/owned_pages?access_token=${longData.access_token}&fields=id,name,access_token`
+            );
+            const bpData: any = await bpResp.json();
+            console.log(`[meta/callback] business ${biz.id} pages:`, JSON.stringify(bpData));
+            if (!bpData.error && bpData.data?.length > 0) {
+              pages = [...pages, ...bpData.data];
+            }
+          }
+        }
+      }
 
       if (pages.length === 0) {
         return void res.redirect(
