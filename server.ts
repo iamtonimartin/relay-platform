@@ -2188,7 +2188,7 @@ async function startServer() {
         });
       } else if (channel === "instagram") {
         // Instagram Business Login: send via the Instagram account's own endpoint
-        await fetch(`https://graph.facebook.com/v20.0/${pageId}/messages`, {
+        const igResp = await fetch(`https://graph.facebook.com/v20.0/${pageId}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2198,6 +2198,8 @@ async function startServer() {
             access_token: accessToken,
           }),
         });
+        const igRespData = await igResp.json();
+        console.log("[sendMetaReply] instagram result:", JSON.stringify(igRespData));
       } else {
         // Facebook Messenger
         await fetch("https://graph.facebook.com/v19.0/me/messages", {
