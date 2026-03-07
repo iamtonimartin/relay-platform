@@ -1924,6 +1924,7 @@ async function startServer() {
   app.post("/api/webhooks/meta", async (req: any, res) => {
     // Always respond 200 quickly — Meta will retry if we don't
     res.sendStatus(200);
+    console.log("[webhook] POST received, object:", req.body?.object, "sig:", req.headers["x-hub-signature-256"] ? "present" : "absent");
 
     try {
       // Verify X-Hub-Signature-256 header using the raw body captured before JSON parsing.
