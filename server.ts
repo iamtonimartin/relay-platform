@@ -1714,7 +1714,7 @@ async function startServer() {
     const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
     const scope = channel === "instagram"
       ? "pages_messaging,pages_show_list,instagram_manage_messages,instagram_basic"
-      : "pages_messaging,pages_show_list,pages_read_engagement";
+      : "pages_messaging,pages_show_list";
 
     res.redirect(
       `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code`
