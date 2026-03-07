@@ -301,7 +301,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Capture raw body for Meta webhook signature verification before JSON parsing
+  app.use(express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }));
 
   // ---------------------------------------------------------------------------
   // Auth — multi-user login, JWT middleware, user management
@@ -1885,28 +1890,28 @@ async function startServer() {
 
   // POST /api/webhooks/meta — Meta sends inbound messages here.
   // Signature is verified against the app secret before processing.
-  app.post("/api/webhooks/meta", express.raw({ type: "application/json" }), async (req, res) => {
+  app.post("/api/webhooks/meta", async (req: any, res) => {
     // Always respond 200 quickly — Meta will retry if we don't
     res.sendStatus(200);
 
     try {
-      // Verify X-Hub-Signature-256 header
+      // Verify X-Hub-Signature-256 header using the raw body captured before JSON parsing
       const sig = (req.headers["x-hub-signature-256"] as string) ?? "";
       const { data: secretRow } = await supabase
         .from("platform_settings")
         .select("value")
         .eq("key", "meta_app_secret")
         .single();
-      if (secretRow?.value && sig) {
+      if (secretRow?.value && sig && req.rawBody) {
         const { createHmac } = await import("crypto");
-        const expected = "sha256=" + createHmac("sha256", secretRow.value).update(req.body).digest("hex");
+        const expected = "sha256=" + createHmac("sha256", secretRow.value).update(req.rawBody).digest("hex");
         if (sig !== expected) {
           console.warn("Meta webhook signature mismatch — ignoring");
           return;
         }
       }
 
-      const payload = JSON.parse(req.body.toString());
+      const payload = req.body;
       const object: string = payload.object; // "page" | "instagram" | "whatsapp_business_account"
 
       for (const entry of payload.entry ?? []) {
