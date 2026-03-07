@@ -88,6 +88,66 @@ const MODEL_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
   ],
 };
 
+// Renders a subset of markdown in chat messages: bold, numbered lists, bullet lists
+function MarkdownMessage({ content }: { content: string }) {
+  const renderInline = (text: string): React.ReactNode => {
+    const parts = text.split(/(\*\*.*?\*\*)/);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+      }
+      return <React.Fragment key={i}>{part}</React.Fragment>;
+    });
+  };
+
+  const lines = content.split('\n');
+  const result: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line) { i++; continue; }
+
+    // Numbered list — collect consecutive items
+    if (/^\d+\.\s/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
+        i++;
+      }
+      result.push(
+        <ol key={`ol-${i}`} className="list-decimal pl-5 space-y-1 my-2">
+          {items.map((item, idx) => <li key={idx}>{renderInline(item)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+
+    // Bullet list — collect consecutive items
+    if (/^[-*]\s/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+        i++;
+      }
+      result.push(
+        <ul key={`ul-${i}`} className="list-disc pl-5 space-y-1 my-2">
+          {items.map((item, idx) => <li key={idx}>{renderInline(item)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    // Regular paragraph
+    result.push(
+      <p key={`p-${i}`} className={result.length > 0 ? 'mt-2' : ''}>{renderInline(line)}</p>
+    );
+    i++;
+  }
+
+  return <div>{result}</div>;
+}
+
 export default function AssistantSettings() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -892,7 +952,9 @@ export default function AssistantSettings() {
                             : 'bg-slate-100 text-slate-800 rounded-bl-sm'
                         )}
                       >
-                        {msg.content}
+                        {msg.role === 'assistant'
+                          ? <MarkdownMessage content={msg.content} />
+                          : msg.content}
                       </div>
                       {msg.role === 'assistant' && (
                         <div className="mt-1 space-y-1.5 w-full max-w-[80%]">
