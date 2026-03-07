@@ -91,10 +91,14 @@ const MODEL_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
 // Renders a subset of markdown in chat messages: bold, numbered lists, bullet lists
 function MarkdownMessage({ content }: { content: string }) {
   const renderInline = (text: string): React.ReactNode => {
-    const parts = text.split(/(\*\*.*?\*\*)/);
+    const parts = text.split(/(\*\*.*?\*\*|\[.*?\]\(.*?\))/);
     return parts.map((part, i) => {
       if (part.startsWith('**') && part.endsWith('**')) {
         return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+      }
+      const linkMatch = part.match(/^\[(.*?)\]\((.*?)\)$/);
+      if (linkMatch) {
+        return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-teal-600 underline hover:text-teal-800">{linkMatch[1]}</a>;
       }
       return <React.Fragment key={i}>{part}</React.Fragment>;
     });
