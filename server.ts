@@ -1771,6 +1771,7 @@ async function startServer() {
         `https://graph.facebook.com/v19.0/me/accounts?access_token=${longData.access_token}&fields=id,name,access_token`
       );
       const pagesData: any = await pagesResp.json();
+      console.log("[meta/callback] pages response:", JSON.stringify(pagesData));
       if (pagesData.error) throw new Error(pagesData.error.message);
       const pages: { id: string; name: string; access_token: string }[] = pagesData.data ?? [];
 
