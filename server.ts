@@ -1793,13 +1793,16 @@ async function startServer() {
         const longData: any = await longResp.json();
         if (longData.error) throw new Error(longData.error.message);
 
-        // Get the Instagram Business Account info
+        // Get the Instagram Business Account info — fetch ig_id which is the
+        // actual Instagram account ID used in webhook entry.id / recipient.id
         const meResp = await fetch(
-          `https://graph.instagram.com/me?fields=id,name,username&access_token=${longData.access_token}`
+          `https://graph.instagram.com/me?fields=id,name,username,ig_id&access_token=${longData.access_token}`
         );
         const meData: any = await meResp.json();
         console.log("[ig/callback] me:", JSON.stringify(meData));
         if (meData.error) throw new Error(meData.error.message);
+        // ig_id is the webhook-facing ID; fall back to id if not available
+        const webhookPageId = meData.ig_id ? String(meData.ig_id) : meData.id;
 
         // Subscribe this Instagram account to webhook events so real DMs are delivered
         const subResp = await fetch(
@@ -1808,13 +1811,14 @@ async function startServer() {
         );
         const subData: any = await subResp.json();
         console.log("[ig/callback] subscription:", JSON.stringify(subData));
+        console.log("[ig/callback] storing page_id:", webhookPageId);
 
-        // Store the connection — page_id holds the Instagram Business Account ID
+        // Store the connection — page_id uses ig_id (webhook-facing ID) so lookups match
         await supabase.from("channel_connections").upsert({
           assistant_id: assistantId,
           channel: "instagram",
           status: "connected",
-          page_id: meData.id,
+          page_id: webhookPageId,
           page_name: meData.name || meData.username || "Instagram Account",
           access_token: longData.access_token,
           connected_at: new Date().toISOString(),
@@ -2004,14 +2008,37 @@ async function startServer() {
 
     // Find the channel connection and its assistant
     const lookupField = channel === "whatsapp" ? "phone_number_id" : "page_id";
-    const { data: conn } = await supabase
+    let { data: conn } = await supabase
       .from("channel_connections")
       .select("assistant_id, access_token, page_id, phone_number_id")
       .eq("channel", channel)
       .eq(lookupField, pageId)
       .eq("status", "connected")
       .single();
-    if (!conn) return;
+
+    // Fallback for Instagram: if the stored page_id doesn't match the webhook entry.id,
+    // find any active Instagram connection and update its page_id to the correct value
+    if (!conn && channel === "instagram") {
+      const { data: fallback } = await supabase
+        .from("channel_connections")
+        .select("assistant_id, access_token, page_id, phone_number_id")
+        .eq("channel", "instagram")
+        .eq("status", "connected")
+        .single();
+      if (fallback) {
+        console.log("[handleMetaMessage] updating Instagram page_id from", fallback.page_id, "to", pageId);
+        await supabase.from("channel_connections")
+          .update({ page_id: pageId, updated_at: new Date().toISOString() })
+          .eq("channel", "instagram")
+          .eq("assistant_id", fallback.assistant_id);
+        conn = { ...fallback, page_id: pageId };
+      }
+    }
+
+    if (!conn) {
+      console.warn("[handleMetaMessage] no connection found for channel:", channel, "pageId:", pageId);
+      return;
+    }
 
     const { assistant_id, access_token } = conn;
 
