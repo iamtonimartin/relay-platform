@@ -1237,6 +1237,16 @@ async function startServer() {
     res.json(data);
   });
 
+  // Permanently delete a conversation and all its messages (messages cascade via FK)
+  app.delete("/api/conversations/:id", async (req, res) => {
+    const { error } = await supabase
+      .from("conversations")
+      .delete()
+      .eq("id", req.params.id);
+    if (error) return res.status(500).json({ error: "Failed to delete conversation" });
+    res.json({ success: true });
+  });
+
   // Send a message from a human agent into a conversation
   app.post("/api/conversations/:id/messages", async (req, res) => {
     const { content } = req.body as { content: string };

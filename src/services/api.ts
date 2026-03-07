@@ -215,6 +215,11 @@ export const api = {
     if (!res.ok) throw new Error('Failed to update conversation');
   },
 
+  async deleteConversation(id: string): Promise<void> {
+    const res = await apiFetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete conversation');
+  },
+
   async sendAgentMessage(conversationId: string, content: string): Promise<Message> {
     const res = await apiFetch(`${API_BASE}/conversations/${conversationId}/messages`, {
       method: 'POST',

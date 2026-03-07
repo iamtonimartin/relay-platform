@@ -15,6 +15,9 @@ import {
   UserCheck,
   Tag,
   Plus,
+  Archive,
+  Trash2,
+  MoreVertical,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ConversationSummary, Message } from '../types';
@@ -45,7 +48,7 @@ function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-type StatusFilter = 'all' | 'active' | 'handed_off' | 'closed';
+type StatusFilter = 'all' | 'active' | 'handed_off' | 'closed' | 'archived';
 
 export default function Inbox() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -56,12 +59,17 @@ export default function Inbox() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [isClosing, setIsClosing] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [isTakenOver, setIsTakenOver] = useState(false);
   const [agentInput, setAgentInput] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [showTagInput, setShowTagInput] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [showConvMenu, setShowConvMenu] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const convMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentInputRef = useRef<HTMLInputElement>(null);
   const tagInputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +81,17 @@ export default function Inbox() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Close the conversation action menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (convMenuRef.current && !convMenuRef.current.contains(e.target as Node)) {
+        setShowConvMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const loadConversations = async () => {
     setIsLoading(true);
@@ -131,6 +150,38 @@ export default function Inbox() {
       console.error(err);
     } finally {
       setIsClosing(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!selectedId) return;
+    setIsArchiving(true);
+    setShowConvMenu(false);
+    try {
+      await api.updateConversationStatus(selectedId, 'archived');
+      setConversations(prev =>
+        prev.map(c => c.id === selectedId ? { ...c, status: 'archived' } : c)
+      );
+      setSelectedId(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setIsDeleting(true);
+    try {
+      await api.deleteConversation(id);
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (selectedId === id) setSelectedId(null);
+      setDeleteConfirmId(null);
+      setShowConvMenu(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -211,8 +262,13 @@ export default function Inbox() {
   const allTags = [...new Set(conversations.flatMap(c => c.tags || []))].sort();
 
   // Client-side filtering: status + tag + search
+  // "all" intentionally excludes archived — archived is a separate explicit filter
   const filtered = conversations.filter(c => {
-    if (filter !== 'all' && c.status !== filter) return false;
+    if (filter === 'all') {
+      if (c.status === 'archived') return false;
+    } else {
+      if (c.status !== filter) return false;
+    }
     if (tagFilter && !(c.tags || []).includes(tagFilter)) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -228,15 +284,18 @@ export default function Inbox() {
   });
 
   const activeCount = conversations.filter(c => c.status === 'active').length;
+  const archivedCount = conversations.filter(c => c.status === 'archived').length;
   const selectedConv = conversations.find(c => c.id === selectedId);
 
   const statusBadge = (status: string) => {
     if (status === 'active') return <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 uppercase tracking-wider"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />Active</span>;
     if (status === 'handed_off') return <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 uppercase tracking-wider"><AlertCircle className="w-3 h-3" />Handed off</span>;
+    if (status === 'archived') return <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Archive className="w-3 h-3" />Archived</span>;
     return <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><CheckCircle2 className="w-3 h-3" />Closed</span>;
   };
 
   return (
+    <>
     <div className="h-[calc(100vh-10rem)] lg:h-[calc(100vh-7rem)] flex gap-4 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
       {/* Left panel — conversation list                                       */}
@@ -297,6 +356,17 @@ export default function Inbox() {
                 {f.replace('_', ' ')}
               </button>
             ))}
+            {archivedCount > 0 && (
+              <button
+                onClick={() => setFilter('archived')}
+                className={cn(
+                  'flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full whitespace-nowrap transition-colors',
+                  filter === 'archived' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
+                )}
+              >
+                <Archive className="w-2.5 h-2.5" />Archived
+              </button>
+            )}
           </div>
 
           {/* Tag filters — only shown when tags exist */}
@@ -449,32 +519,77 @@ export default function Inbox() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                {selectedConv?.status !== 'closed' && !isTakenOver && (
-                  <button
-                    onClick={handleTakeOver}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors"
-                  >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    Take Over
-                  </button>
-                )}
-                {isTakenOver && (
-                  <span className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold">
-                    <UserCheck className="w-3.5 h-3.5" />
-                    You're responding
-                  </span>
-                )}
-                {selectedConv?.status !== 'closed' && (
-                  <button
-                    onClick={handleClose}
-                    disabled={isClosing}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors disabled:opacity-50"
-                  >
-                    {isClosing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                    Close
-                  </button>
-                )}
-              </div>
+                  {selectedConv?.status !== 'closed' && selectedConv?.status !== 'archived' && !isTakenOver && (
+                    <button
+                      onClick={handleTakeOver}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      Take Over
+                    </button>
+                  )}
+                  {isTakenOver && (
+                    <span className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold">
+                      <UserCheck className="w-3.5 h-3.5" />
+                      You're responding
+                    </span>
+                  )}
+                  {selectedConv?.status !== 'closed' && selectedConv?.status !== 'archived' && (
+                    <button
+                      onClick={handleClose}
+                      disabled={isClosing}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors disabled:opacity-50"
+                    >
+                      {isClosing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      Close
+                    </button>
+                  )}
+                  {/* Three-dots menu — Archive and Delete */}
+                  <div className="relative" ref={convMenuRef}>
+                    <button
+                      onClick={() => setShowConvMenu(v => !v)}
+                      className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                    {showConvMenu && (
+                      <div className="absolute right-0 mt-1 w-44 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+                        {selectedConv?.status !== 'archived' && (
+                          <button
+                            onClick={handleArchive}
+                            disabled={isArchiving}
+                            className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                          >
+                            <Archive className="w-4 h-4 text-slate-400" />
+                            Archive
+                          </button>
+                        )}
+                        {selectedConv?.status === 'archived' && (
+                          <button
+                            onClick={async () => {
+                              if (!selectedId) return;
+                              setShowConvMenu(false);
+                              await api.updateConversationStatus(selectedId, 'closed');
+                              setConversations(prev => prev.map(c => c.id === selectedId ? { ...c, status: 'closed' } : c));
+                            }}
+                            className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                          >
+                            <RefreshCw className="w-4 h-4 text-slate-400" />
+                            Unarchive
+                          </button>
+                        )}
+                        <div className="border-t border-slate-100 my-1" />
+                        <button
+                          onClick={() => { setDeleteConfirmId(selectedId); setShowConvMenu(false); }}
+                          className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
             </div>
 
               {/* Tag row */}
@@ -606,8 +721,10 @@ export default function Inbox() {
                     {isSendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   </button>
                 </div>
-              ) : selectedConv?.status === 'closed' ? (
-                <p className="text-xs text-slate-400 text-center py-1">This conversation is closed.</p>
+              ) : selectedConv?.status === 'closed' || selectedConv?.status === 'archived' ? (
+                <p className="text-xs text-slate-400 text-center py-1">
+                  {selectedConv.status === 'archived' ? 'This conversation is archived.' : 'This conversation is closed.'}
+                </p>
               ) : (
                 <p className="text-xs text-slate-400 text-center py-1">
                   Click <span className="font-semibold text-amber-600">Take Over</span> to reply as a human agent.
@@ -618,5 +735,35 @@ export default function Inbox() {
         )}
       </div>
     </div>
+
+    {/* Delete confirmation modal */}
+    {deleteConfirmId && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6">
+          <h3 className="text-base font-semibold text-slate-900 mb-2">Delete conversation?</h3>
+          <p className="text-sm text-slate-500 mb-6">
+            This will permanently delete the conversation and all its messages. This cannot be undone.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setDeleteConfirmId(null)}
+              disabled={isDeleting}
+              className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleDelete(deleteConfirmId)}
+              disabled={isDeleting}
+              className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
