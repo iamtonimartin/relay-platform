@@ -37,7 +37,12 @@ export default function Layout() {
             {/* Page title will be injected here if needed */}
           </div>
           <div className="flex items-center gap-2 lg:gap-4">
-            <button className="hidden sm:block text-sm font-medium text-slate-600 hover:text-slate-900">Docs</button>
+            <button
+              onClick={() => navigate('/docs')}
+              className="hidden sm:block text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              Docs
+            </button>
             <div className="hidden sm:block h-4 w-px bg-slate-200"></div>
             <button 
               onClick={() => navigate('/assistants?create=true')}

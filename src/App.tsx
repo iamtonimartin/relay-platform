@@ -7,6 +7,7 @@ import Inbox from './pages/Inbox';
 import Leads from './pages/Leads';
 import Integrations from './pages/Integrations';
 import Settings from './pages/Settings';
+import Docs from './pages/Docs';
 import Login from './pages/Login';
 import { api } from './services/api';
 import { AnalyticsData } from './types';
@@ -294,6 +295,7 @@ export default function App() {
           <Route path="leads" element={<Leads />} />
           <Route path="integrations" element={<Integrations />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="docs" element={<Docs />} />
         </Route>
       </Routes>
     </BrowserRouter>
