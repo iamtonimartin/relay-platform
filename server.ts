@@ -1703,26 +1703,36 @@ async function startServer() {
       return void res.redirect(`/login?error=session_expired`);
     }
 
-    const { data: settings } = await supabase
+    const state = Buffer.from(JSON.stringify({ assistantId: assistant_id, channel })).toString("base64url");
+    const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
+
+    if (channel === "instagram") {
+      // Instagram Business Login — uses a separate Instagram App ID, different OAuth endpoint
+      const { data: igSettings } = await supabase
+        .from("platform_settings")
+        .select("key, value")
+        .in("key", ["instagram_app_id"]);
+      const igMap = Object.fromEntries((igSettings ?? []).map((s: any) => [s.key, s.value]));
+      if (!igMap.instagram_app_id) {
+        return void res.redirect(`/assistants/${assistant_id}?tab=channels&meta_error=missing_instagram_credentials`);
+      }
+      return void res.redirect(
+        `https://api.instagram.com/oauth/authorize?client_id=${igMap.instagram_app_id}&redirect_uri=${redirectUri}&response_type=code&scope=instagram_business_basic,instagram_business_manage_messages&state=${state}`
+      );
+    }
+
+    // Facebook — standard Facebook Login OAuth
+    const { data: fbSettings } = await supabase
       .from("platform_settings")
       .select("key, value")
       .in("key", ["meta_app_id"]);
-    const settingsMap = Object.fromEntries((settings ?? []).map((s: any) => [s.key, s.value]));
-    const appId = settingsMap.meta_app_id;
-    if (!appId) {
+    const fbMap = Object.fromEntries((fbSettings ?? []).map((s: any) => [s.key, s.value]));
+    if (!fbMap.meta_app_id) {
       return void res.redirect(`/assistants/${assistant_id}?tab=channels&meta_error=missing_credentials`);
     }
-
-    const state = Buffer.from(JSON.stringify({ assistantId: assistant_id, channel })).toString("base64url");
-    // Use x-forwarded-proto header when behind a reverse proxy (Railway, Render, etc.)
-    const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
-    const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
-    const scope = channel === "instagram"
-      ? "pages_show_list,instagram_business_basic,instagram_business_manage_messages,business_management"
-      : "pages_messaging,pages_show_list,business_management";
-
     res.redirect(
-      `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}&response_type=code`
+      `https://www.facebook.com/v19.0/dialog/oauth?client_id=${fbMap.meta_app_id}&redirect_uri=${redirectUri}&scope=pages_messaging,pages_show_list,business_management&state=${state}&response_type=code`
     );
   });
 
@@ -1744,22 +1754,83 @@ async function startServer() {
       return void res.redirect("/?meta_error=invalid_state");
     }
 
-    const { data: settings } = await supabase
-      .from("platform_settings")
-      .select("key, value")
-      .in("key", ["meta_app_id", "meta_app_secret"]);
-    const sm = Object.fromEntries((settings ?? []).map((s: any) => [s.key, s.value]));
-    if (!sm.meta_app_id || !sm.meta_app_secret) {
-      return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_error=missing_credentials`);
-    }
+    const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const redirectUri = `${protocol}://${req.get("host")}/api/auth/meta/callback`;
 
     try {
-      const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol;
-      const redirectUri = encodeURIComponent(`${protocol}://${req.get("host")}/api/auth/meta/callback`);
+      if (channel === "instagram") {
+        // ---------------------------------------------------------------------------
+        // Instagram Business Login token exchange
+        // ---------------------------------------------------------------------------
+        const { data: igSettings } = await supabase
+          .from("platform_settings")
+          .select("key, value")
+          .in("key", ["instagram_app_id", "instagram_app_secret"]);
+        const igs = Object.fromEntries((igSettings ?? []).map((s: any) => [s.key, s.value]));
+        if (!igs.instagram_app_id || !igs.instagram_app_secret) {
+          return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_error=missing_instagram_credentials`);
+        }
+
+        // Exchange authorisation code for short-lived Instagram token
+        const tokenResp = await fetch("https://api.instagram.com/oauth/access_token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: igs.instagram_app_id,
+            client_secret: igs.instagram_app_secret,
+            grant_type: "authorization_code",
+            redirect_uri: redirectUri,
+            code,
+          }).toString(),
+        });
+        const tokenData: any = await tokenResp.json();
+        if (tokenData.error_type) throw new Error(tokenData.error_message || tokenData.error_type);
+
+        // Exchange short-lived token for long-lived token (60-day expiry)
+        const longResp = await fetch(
+          `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${igs.instagram_app_secret}&access_token=${tokenData.access_token}`
+        );
+        const longData: any = await longResp.json();
+        if (longData.error) throw new Error(longData.error.message);
+
+        // Get the Instagram Business Account info
+        const meResp = await fetch(
+          `https://graph.instagram.com/me?fields=id,name,username&access_token=${longData.access_token}`
+        );
+        const meData: any = await meResp.json();
+        console.log("[ig/callback] me:", JSON.stringify(meData));
+        if (meData.error) throw new Error(meData.error.message);
+
+        // Store the connection — page_id holds the Instagram Business Account ID
+        await supabase.from("channel_connections").upsert({
+          assistant_id: assistantId,
+          channel: "instagram",
+          status: "connected",
+          page_id: meData.id,
+          page_name: meData.name || meData.username || "Instagram Account",
+          access_token: longData.access_token,
+          connected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "assistant_id,channel" });
+
+        return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_connected=instagram`);
+      }
+
+      // ---------------------------------------------------------------------------
+      // Facebook Login token exchange (Messenger)
+      // ---------------------------------------------------------------------------
+      const { data: fbSettings } = await supabase
+        .from("platform_settings")
+        .select("key, value")
+        .in("key", ["meta_app_id", "meta_app_secret"]);
+      const sm = Object.fromEntries((fbSettings ?? []).map((s: any) => [s.key, s.value]));
+      if (!sm.meta_app_id || !sm.meta_app_secret) {
+        return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_error=missing_credentials`);
+      }
 
       // Exchange code for short-lived user token
       const tokenResp = await fetch(
-        `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${sm.meta_app_id}&redirect_uri=${redirectUri}&client_secret=${sm.meta_app_secret}&code=${code}`
+        `https://graph.facebook.com/v19.0/oauth/access_token?client_id=${sm.meta_app_id}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${sm.meta_app_secret}&code=${code}`
       );
       const tokenData: any = await tokenResp.json();
       if (tokenData.error) throw new Error(tokenData.error.message);
@@ -1771,89 +1842,49 @@ async function startServer() {
       const longData: any = await longResp.json();
       if (longData.error) throw new Error(longData.error.message);
 
-      // Log who the token belongs to for debugging
-      const meResp = await fetch(`https://graph.facebook.com/v19.0/me?access_token=${longData.access_token}&fields=id,name`);
-      const meData: any = await meResp.json();
-      console.log("[meta/callback] me:", JSON.stringify(meData));
-
-      // Get all pages this user manages directly (each page gets its own non-expiring token)
+      // Get all pages this user manages directly
       const pagesResp = await fetch(
         `https://graph.facebook.com/v19.0/me/accounts?access_token=${longData.access_token}&fields=id,name,access_token`
       );
       const pagesData: any = await pagesResp.json();
-      console.log("[meta/callback] pages response:", JSON.stringify(pagesData));
       if (pagesData.error) throw new Error(pagesData.error.message);
       let pages: { id: string; name: string; access_token: string }[] = pagesData.data ?? [];
 
-      // Fallback: if no pages found via me/accounts, try fetching via Business Manager
-      // (pages managed through Meta Business Suite don't appear in me/accounts)
+      // Fallback: pages managed through Business Manager don't appear in me/accounts
       if (pages.length === 0) {
         const bizResp = await fetch(
           `https://graph.facebook.com/v19.0/me/businesses?access_token=${longData.access_token}&fields=id,name`
         );
         const bizData: any = await bizResp.json();
-        console.log("[meta/callback] businesses response:", JSON.stringify(bizData));
-
         if (!bizData.error && bizData.data?.length > 0) {
           for (const biz of bizData.data) {
             const bpResp = await fetch(
               `https://graph.facebook.com/v19.0/${biz.id}/owned_pages?access_token=${longData.access_token}&fields=id,name,access_token`
             );
             const bpData: any = await bpResp.json();
-            console.log(`[meta/callback] business ${biz.id} pages:`, JSON.stringify(bpData));
-            if (!bpData.error && bpData.data?.length > 0) {
-              pages = [...pages, ...bpData.data];
-            }
+            if (!bpData.error && bpData.data?.length > 0) pages = [...pages, ...bpData.data];
           }
         }
       }
 
       if (pages.length === 0) {
-        return void res.redirect(
-          `/assistants/${assistantId}?tab=channels&meta_error=no_pages`
-        );
+        return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_error=no_pages`);
       }
 
-      // For Instagram: find the Instagram Business Account linked to each page
-      let connectPage = pages[0];
-      let igAccountId: string | null = null;
-
-      if (channel === "instagram") {
-        for (const page of pages) {
-          const igResp = await fetch(
-            `https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${page.access_token}`
-          );
-          const igData: any = await igResp.json();
-          if (igData.instagram_business_account?.id) {
-            igAccountId = igData.instagram_business_account.id;
-            connectPage = page;
-            break;
-          }
-        }
-        if (!igAccountId) {
-          return void res.redirect(
-            `/assistants/${assistantId}?tab=channels&meta_error=no_instagram`
-          );
-        }
-      }
-
-      // If the user manages multiple pages, pass them back so the frontend can let them pick.
-      // For Instagram we've already picked the one with an IG account.
-      if (channel === "facebook" && pages.length > 1) {
+      // If multiple pages, let the user pick
+      if (pages.length > 1) {
         const encoded = Buffer.from(JSON.stringify(pages.map(p => ({ id: p.id, name: p.name, access_token: p.access_token })))).toString("base64url");
-        return void res.redirect(
-          `/assistants/${assistantId}?tab=channels&meta_pages=${encoded}&channel=${channel}`
-        );
+        return void res.redirect(`/assistants/${assistantId}?tab=channels&meta_pages=${encoded}&channel=${channel}`);
       }
 
-      // Single page (or Instagram already resolved) — store immediately
+      // Single page — store immediately
       await supabase.from("channel_connections").upsert({
         assistant_id: assistantId,
         channel,
         status: "connected",
-        page_id: channel === "instagram" ? igAccountId : connectPage.id,
-        page_name: connectPage.name,
-        access_token: connectPage.access_token,
+        page_id: pages[0].id,
+        page_name: pages[0].name,
+        access_token: pages[0].access_token,
         connected_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }, { onConflict: "assistant_id,channel" });
@@ -2020,7 +2051,7 @@ async function startServer() {
         { id: uuidv4(), conversation_id: convId, role: "user", content: text },
         { id: uuidv4(), conversation_id: convId, role: "assistant", content: reply },
       ]);
-      await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, phoneNumberId: conn.phone_number_id });
+      await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, pageId: conn.page_id, phoneNumberId: conn.phone_number_id });
       return;
     }
 
@@ -2032,7 +2063,7 @@ async function startServer() {
         { id: uuidv4(), conversation_id: convId, role: "assistant", content: reply },
       ]);
       await supabase.from("conversations").update({ status: "handed_off", updated_at: new Date().toISOString() }).eq("id", convId);
-      await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, phoneNumberId: conn.phone_number_id });
+      await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, pageId: conn.page_id, phoneNumberId: conn.phone_number_id });
       sendHandoffEmail({ assistantName: asst.name, conversationId: convId, userMessage: text });
       fireWebhooks("handoff_triggered", { conversation_id: convId, assistant_id, channel, user_message: text });
       return;
@@ -2069,7 +2100,7 @@ async function startServer() {
     await supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", convId);
 
     // Send reply back via Meta
-    await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, phoneNumberId: conn.phone_number_id });
+    await sendMetaReply({ channel, senderId, text: reply, accessToken: access_token, pageId: conn.page_id, phoneNumberId: conn.phone_number_id });
 
     // Auto-handoff after N consecutive fallbacks
     const fallbackThreshold = asst.fallback_handoff_count ?? 0;
@@ -2097,9 +2128,10 @@ async function startServer() {
     senderId: string;
     text: string;
     accessToken: string;
-    phoneNumberId?: string;
+    pageId?: string;       // Instagram Business Account ID (required for Instagram)
+    phoneNumberId?: string; // WhatsApp phone number ID
   }) {
-    const { channel, senderId, text, accessToken, phoneNumberId } = opts;
+    const { channel, senderId, text, accessToken, pageId, phoneNumberId } = opts;
     try {
       if (channel === "whatsapp") {
         await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
@@ -2112,8 +2144,20 @@ async function startServer() {
             text: { body: text },
           }),
         });
+      } else if (channel === "instagram") {
+        // Instagram Business Login: send via the Instagram account's own endpoint
+        await fetch(`https://graph.facebook.com/v20.0/${pageId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: senderId },
+            message: { text },
+            messaging_type: "RESPONSE",
+            access_token: accessToken,
+          }),
+        });
       } else {
-        // Facebook Messenger and Instagram both use the same send endpoint
+        // Facebook Messenger
         await fetch("https://graph.facebook.com/v19.0/me/messages", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

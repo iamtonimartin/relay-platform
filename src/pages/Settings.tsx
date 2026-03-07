@@ -65,6 +65,8 @@ function ApiKeysSection() {
     meta_app_id: '',
     meta_app_secret: '',
     meta_webhook_verify_token: '',
+    instagram_app_id: '',
+    instagram_app_secret: '',
   });
   const [vectorProvider, setVectorProvider] = useState('pinecone');
   const [status, setStatus] = useState<SaveStatus>('idle');
@@ -81,6 +83,8 @@ function ApiKeysSection() {
         meta_app_id: settings.meta_app_id || '',
         meta_app_secret: settings.meta_app_secret || '',
         meta_webhook_verify_token: settings.meta_webhook_verify_token || '',
+        instagram_app_id: settings.instagram_app_id || '',
+        instagram_app_secret: settings.instagram_app_secret || '',
       });
       if (settings.vector_db_provider) setVectorProvider(settings.vector_db_provider);
     }).catch(console.error).finally(() => setIsLoading(false));
@@ -221,6 +225,32 @@ function ApiKeysSection() {
                 type="password"
                 value={keys.meta_app_secret}
                 onChange={e => setKeys(k => ({ ...k, meta_app_secret: e.target.value }))}
+                placeholder="••••••••••••••••"
+                className="w-full pl-4 pr-10 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
+              />
+              <Key className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Instagram App ID</label>
+            <p className="text-xs text-slate-400 mb-2">Found under your Meta app's Instagram use case — "API setup with Instagram login". Different from the Meta App ID above.</p>
+            <input
+              type="text"
+              value={keys.instagram_app_id}
+              onChange={e => setKeys(k => ({ ...k, instagram_app_id: e.target.value }))}
+              placeholder="1833989753927971"
+              className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Instagram App Secret</label>
+            <div className="relative">
+              <input
+                type="password"
+                value={keys.instagram_app_secret}
+                onChange={e => setKeys(k => ({ ...k, instagram_app_secret: e.target.value }))}
                 placeholder="••••••••••••••••"
                 className="w-full pl-4 pr-10 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
               />
