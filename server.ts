@@ -2187,8 +2187,8 @@ async function startServer() {
           }),
         });
       } else if (channel === "instagram") {
-        // Instagram Business Login: send via the Instagram account's own endpoint
-        const igResp = await fetch(`https://graph.facebook.com/v20.0/${pageId}/messages`, {
+        // Instagram Business Login: send via graph.instagram.com (tokens are Instagram-scoped)
+        const igResp = await fetch(`https://graph.instagram.com/v20.0/${pageId}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
