@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Plus, Search, Filter, MoreVertical, Settings, Play, BarChart2 } from 'lucide-react';
+import { Plus, Search, Filter, MoreVertical, Settings, Play, BarChart2, Trash2, ChevronDown } from 'lucide-react';
 import { api } from '../services/api';
 import { Assistant } from '../types';
 import Modal from '../components/Modal';
@@ -35,10 +35,46 @@ const DEFAULT_SYSTEM_PROMPT = `// General Prompt Guidelines:
 // - Answer the user's first question, then ask for their [NAME / EMAIL / PHONE NUMBER].
 // - Once you have collected their details, use the lead capture function to save them.`;
 
+// Keep in sync with MODEL_OPTIONS in AssistantSettings.tsx
+const MODEL_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
+  anthropic: [
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Recommended)' },
+    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  ],
+  openai: [
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+  ],
+  google: [
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
+    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+  ],
+  xai: [
+    { value: 'grok-3', label: 'Grok 3' },
+    { value: 'grok-3-mini', label: 'Grok 3 Mini' },
+    { value: 'grok-2', label: 'Grok 2' },
+  ],
+};
+
 export default function Assistants() {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterProvider, setFilterProvider] = useState<string>('all');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  // Per-card three-dots menu state
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
   const [newAssistant, setNewAssistant] = useState({
     name: '',
     purpose: '',
@@ -47,44 +83,33 @@ export default function Assistants() {
     system_prompt: DEFAULT_SYSTEM_PROMPT,
   });
 
-  // Keep in sync with MODEL_OPTIONS in AssistantSettings.tsx
-  const MODEL_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
-    anthropic: [
-      { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Recommended)' },
-      { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-      { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-    ],
-    openai: [
-      { value: 'gpt-4o', label: 'GPT-4o' },
-      { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-    ],
-    google: [
-      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-      { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
-      { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-    ],
-    xai: [
-      { value: 'grok-3', label: 'Grok 3' },
-      { value: 'grok-3-mini', label: 'Grok 3 Mini' },
-      { value: 'grok-2', label: 'Grok 2' },
-    ],
-  };
-
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
     loadAssistants();
-    
+
     // Check for ?create=true query param
     const params = new URLSearchParams(location.search);
     if (params.get('create') === 'true') {
       setIsModalOpen(true);
-      // Clean up the URL
       navigate('/assistants', { replace: true });
     }
   }, [location]);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const loadAssistants = async () => {
     try {
@@ -110,6 +135,36 @@ export default function Assistants() {
     }
   };
 
+  const handleDelete = async (id: string) => {
+    try {
+      await api.deleteAssistant(id);
+      setAssistants(assistants.filter(a => a.id !== id));
+      setDeleteConfirmId(null);
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // Filter assistants by search query and provider
+  const filteredAssistants = assistants.filter(a => {
+    const matchesSearch =
+      searchQuery === '' ||
+      a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (a.purpose || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesProvider =
+      filterProvider === 'all' || a.model_provider === filterProvider;
+    return matchesSearch && matchesProvider;
+  });
+
+  const providerLabels: Record<string, string> = {
+    all: 'All providers',
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    google: 'Google',
+    xai: 'xAI',
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -117,7 +172,7 @@ export default function Assistants() {
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Assistants</h2>
           <p className="text-slate-500 text-sm">Manage and configure your AI chat agents.</p>
         </div>
-        <button 
+        <button
           onClick={() => setIsModalOpen(true)}
           className="flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-all shadow-sm hover:shadow-md active:scale-95 w-full sm:w-auto"
         >
@@ -126,19 +181,50 @@ export default function Assistants() {
         </button>
       </div>
 
+      {/* Search and filter bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input 
-            type="text" 
-            placeholder="Search assistants..." 
+          <input
+            type="text"
+            placeholder="Search assistants..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all"
           />
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
-          <Filter className="w-4 h-4" />
-          Filter
-        </button>
+        {/* Filter dropdown */}
+        <div className="relative" ref={filterRef}>
+          <button
+            onClick={() => setFilterOpen(!filterOpen)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${
+              filterProvider !== 'all'
+                ? 'border-teal-500 text-teal-600 bg-teal-50'
+                : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Filter className="w-4 h-4" />
+            {providerLabels[filterProvider]}
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+          {filterOpen && (
+            <div className="absolute right-0 mt-1 w-44 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+              {Object.entries(providerLabels).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => { setFilterProvider(value); setFilterOpen(false); }}
+                  className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                    filterProvider === value
+                      ? 'bg-teal-50 text-teal-700 font-medium'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -154,21 +240,24 @@ export default function Assistants() {
           </div>
           <h3 className="text-lg font-semibold text-slate-900">No assistants yet</h3>
           <p className="text-slate-500 mb-6">Create your first AI assistant to get started.</p>
-          <button 
+          <button
             onClick={() => setIsModalOpen(true)}
             className="px-6 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors"
           >
             Create Assistant
           </button>
         </div>
+      ) : filteredAssistants.length === 0 ? (
+        <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300">
+          <p className="text-slate-500">No assistants match your search.</p>
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {assistants.map((assistant) => (
-            <div 
-              key={assistant.id} 
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" ref={menuRef}>
+          {filteredAssistants.map((assistant) => (
+            <div
+              key={assistant.id}
               className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group flex flex-col"
             >
-              <div className="h-2" style={{ backgroundColor: assistant.primary_color || '#0f172a' }}></div>
               <div className="p-6 flex-1">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-4">
@@ -184,26 +273,77 @@ export default function Assistants() {
                       <p className="text-xs text-slate-500">{assistant.model_name}</p>
                     </div>
                   </div>
-                  <button className="p-1 hover:bg-slate-100 rounded-lg transition-colors">
-                    <MoreVertical className="w-4 h-4 text-slate-400" />
-                  </button>
+
+                  {/* Three-dots menu */}
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(openMenuId === assistant.id ? null : assistant.id);
+                      }}
+                      className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      <MoreVertical className="w-4 h-4 text-slate-400" />
+                    </button>
+                    {openMenuId === assistant.id && (
+                      <div className="absolute right-0 mt-1 w-44 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+                        <button
+                          onClick={() => { navigate(`/assistants/${assistant.id}`); setOpenMenuId(null); }}
+                          className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <Settings className="w-4 h-4 text-slate-400" />
+                          Configure
+                        </button>
+                        <button
+                          onClick={() => { navigate(`/assistants/${assistant.id}?tab=preview`); setOpenMenuId(null); }}
+                          className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <Play className="w-4 h-4 text-slate-400" />
+                          Test
+                        </button>
+                        <button
+                          onClick={() => { navigate('/'); setOpenMenuId(null); }}
+                          className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <BarChart2 className="w-4 h-4 text-slate-400" />
+                          Analytics
+                        </button>
+                        <div className="border-t border-slate-100 my-1" />
+                        <button
+                          onClick={() => { setDeleteConfirmId(assistant.id); setOpenMenuId(null); }}
+                          className="w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
+
                 <p className="text-sm text-slate-600 line-clamp-2 mb-6 min-h-[2.5rem]">
                   {assistant.purpose || 'No purpose defined yet.'}
                 </p>
+
                 <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-                  <button 
+                  <button
                     onClick={() => navigate(`/assistants/${assistant.id}`)}
                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors"
                   >
                     <Settings className="w-3.5 h-3.5" />
                     Configure
                   </button>
-                  <button className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors">
+                  <button
+                    onClick={() => navigate(`/assistants/${assistant.id}?tab=preview`)}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors"
+                  >
                     <Play className="w-3.5 h-3.5" />
                     Test
                   </button>
-                  <button className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors">
+                  <button
+                    onClick={() => navigate('/')}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-teal-600 transition-colors"
+                  >
                     <BarChart2 className="w-3.5 h-3.5" />
                     Analytics
                   </button>
@@ -214,29 +354,30 @@ export default function Assistants() {
         </div>
       )}
 
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
+      {/* Create assistant modal */}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
         title="Create New Assistant"
       >
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Assistant Name</label>
-            <input 
+            <input
               required
-              type="text" 
+              type="text"
               value={newAssistant.name}
               onChange={e => setNewAssistant({...newAssistant, name: e.target.value})}
-              placeholder="e.g. Sales Support" 
+              placeholder="e.g. Sales Support"
               className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Purpose / Description</label>
-            <textarea 
+            <textarea
               value={newAssistant.purpose}
               onChange={e => setNewAssistant({...newAssistant, purpose: e.target.value})}
-              placeholder="What is this assistant's main goal?" 
+              placeholder="What is this assistant's main goal?"
               className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 h-24 resize-none"
             />
           </div>
@@ -272,14 +413,14 @@ export default function Assistants() {
             </div>
           </div>
           <div className="pt-4 flex gap-3">
-            <button 
+            <button
               type="button"
               onClick={() => setIsModalOpen(false)}
               className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
             >
               Cancel
             </button>
-            <button 
+            <button
               type="submit"
               className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors shadow-sm"
             >
@@ -287,6 +428,31 @@ export default function Assistants() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Delete confirmation modal */}
+      <Modal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        title="Delete Assistant"
+      >
+        <p className="text-sm text-slate-600 mb-6">
+          Are you sure you want to delete this assistant? This will permanently remove all its settings, knowledge base and conversation history.
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setDeleteConfirmId(null)}
+            className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => deleteConfirmId && handleDelete(deleteConfirmId)}
+            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+          >
+            Delete
+          </button>
+        </div>
       </Modal>
     </div>
   );
