@@ -68,22 +68,33 @@ async function extractTextFromFile(buffer: Buffer, mimetype: string, originalnam
   const ext = path.extname(originalname).toLowerCase();
 
   if (mimetype === "application/pdf" || ext === ".pdf") {
-    // pdf2json is a pure Node.js PDF parser — no worker threads or browser APIs needed
-    return new Promise<string>((resolve, reject) => {
+    // pdf2json extracts the text layer from PDFs — it cannot OCR image-based or scanned PDFs
+    const text = await new Promise<string>((resolve, reject) => {
       const parser = new PDFParser();
       parser.on("pdfParser_dataError", (err: any) => reject(new Error(err?.parserError || "PDF parse error")));
       parser.on("pdfParser_dataReady", (data: any) => {
-        const text = (data.Pages ?? [])
+        const extracted = (data.Pages ?? [])
           .map((page: any) =>
             (page.Texts ?? [])
               .map((t: any) => decodeURIComponent((t.R ?? []).map((r: any) => r.T ?? "").join("")))
               .join(" ")
           )
           .join("\n\n");
-        resolve(text);
+        resolve(extracted);
       });
       parser.parseBuffer(buffer);
     });
+
+    // A very short result (< 100 chars) after pages were found usually means an image-based PDF
+    // with no text layer — pdf2json cannot OCR these
+    if (!text.trim() || text.trim().length < 100) {
+      throw new Error(
+        "This PDF appears to be image-based (e.g. a scanned document or website screenshot saved as PDF). " +
+        "No selectable text was found. Please copy the content into a Text block, or export the page as an HTML-to-text paste instead."
+      );
+    }
+
+    return text;
   }
 
   if (
@@ -645,12 +656,35 @@ async function startServer() {
 
       const html = await fetchRes.text();
       const $ = cheerio.load(html);
-      $("script, style, noscript, nav, footer, header, aside, iframe").remove();
       const pageTitle = $("title").first().text().trim();
+
+      // Detect bot-protection / browser-verification pages (Cloudflare, Vercel, etc.)
+      const lowerTitle = pageTitle.toLowerCase();
+      const isBotChallenge =
+        lowerTitle.includes("just a moment") ||
+        lowerTitle.includes("attention required") ||
+        lowerTitle.includes("checking your browser") ||
+        lowerTitle.includes("please wait") ||
+        lowerTitle.includes("ddos protection");
+
+      if (isBotChallenge) {
+        return res.status(422).json({
+          error:
+            "This URL is protected by a security service (e.g. Cloudflare) that blocks automated access. " +
+            "Try copying the page content and adding it via the Text tab instead.",
+        });
+      }
+
+      $("script, style, noscript, nav, footer, header, aside, iframe").remove();
       const bodyText = $("body").text().replace(/\s+/g, " ").trim();
 
-      if (!bodyText) {
-        return res.status(422).json({ error: "Could not extract any content from this URL." });
+      if (!bodyText || bodyText.length < 50) {
+        return res.status(422).json({
+          error:
+            "Could not extract readable content from this URL. The site may use JavaScript to render its content, " +
+            "which cannot be scraped with a simple fetch. Try copying the page text and adding it via the Text tab, " +
+            "or export the page as a PDF and upload it.",
+        });
       }
 
       const entryId = uuidv4();
