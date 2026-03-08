@@ -182,8 +182,11 @@ export const api = {
     return res.json();
   },
 
-  async getAnalytics(): Promise<AnalyticsData> {
-    const res = await apiFetch(`${API_BASE}/analytics`);
+  async getAnalytics(params?: { start?: string; end?: string }): Promise<AnalyticsData> {
+    const qs = params
+      ? '?' + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => !!v) as [string, string][])).toString()
+      : '';
+    const res = await apiFetch(`${API_BASE}/analytics${qs}`);
     if (!res.ok) throw new Error('Failed to fetch analytics');
     return res.json();
   },

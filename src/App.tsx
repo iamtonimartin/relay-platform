@@ -16,6 +16,9 @@ import {
   Line,
   BarChart,
   Bar,
+  PieChart,
+  Pie,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -24,10 +27,50 @@ import {
 } from 'recharts';
 
 // Format a YYYY-MM-DD string to a short label like "Mar 01"
+// Time labels (e.g. "09:00") are returned as-is
 function formatDate(dateStr: string): string {
+  if (dateStr.includes(':')) return dateStr;
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
+
+type DatePreset = 'today' | '7d' | '30d' | '90d' | '1y' | 'custom';
+
+const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: '7d',   label: '7 days' },
+  { key: '30d',  label: '30 days' },
+  { key: '90d',  label: '90 days' },
+  { key: '1y',   label: '12 months' },
+  { key: 'custom', label: 'Custom' },
+];
+
+// Returns ISO date strings for start/end given a preset
+function getPresetRange(preset: DatePreset, customStart: string, customEnd: string): { start: string; end: string; label: string } {
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+
+  const daysAgo = (n: number) => {
+    const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().split('T')[0];
+  };
+
+  switch (preset) {
+    case 'today':   return { start: todayStr,     end: todayStr,    label: 'Today' };
+    case '7d':      return { start: daysAgo(6),   end: todayStr,    label: 'Last 7 days' };
+    case '30d':     return { start: daysAgo(29),  end: todayStr,    label: 'Last 30 days' };
+    case '90d':     return { start: daysAgo(89),  end: todayStr,    label: 'Last 90 days' };
+    case '1y':      return { start: daysAgo(364), end: todayStr,    label: 'Last 12 months' };
+    case 'custom':  return { start: customStart || daysAgo(29), end: customEnd || todayStr, label: 'Custom range' };
+  }
+}
+
+// Colours for the conversation outcomes donut chart
+const OUTCOME_COLOURS: Record<string, string> = {
+  'Active':     '#0d9488',
+  'Handed Off': '#f59e0b',
+  'Closed':     '#64748b',
+  'Archived':   '#cbd5e1',
+};
 
 // Format large numbers with commas
 function formatNumber(n: number): string {
@@ -39,10 +82,15 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [preset, setPreset] = useState<DatePreset>('30d');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = async (p: DatePreset = preset, cs = customStart, ce = customEnd) => {
+    setLoading(true);
     try {
-      const data = await api.getAnalytics();
+      const range = getPresetRange(p, cs, ce);
+      const data = await api.getAnalytics({ start: range.start, end: range.end });
       setAnalytics(data);
       setLastUpdated(new Date());
       setError(null);
@@ -53,9 +101,7 @@ const Dashboard = () => {
     }
   };
 
-  useEffect(() => {
-    fetchAnalytics();
-  }, []);
+  useEffect(() => { fetchAnalytics(); }, []);
 
   // Format the chart data — convert raw dates to short labels
   const chartData = (analytics?.conversationsOverTime ?? []).map(d => ({
@@ -96,6 +142,13 @@ const Dashboard = () => {
   // Busiest hours chart data
   const busiestHoursData = analytics?.busiestHours ?? [];
 
+  // Conversation outcomes for donut chart
+  const outcomes = analytics?.conversationOutcomes ?? [];
+  const outcomeTotal = outcomes.reduce((s, o) => s + o.count, 0);
+
+  // Active date range label for chart headers
+  const rangeLabel = getPresetRange(preset, customStart, customEnd).label;
+
   const updatedLabel = lastUpdated
     ? `Updated ${lastUpdated.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
     : '';
@@ -107,13 +160,53 @@ const Dashboard = () => {
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Dashboard Overview</h2>
           <p className="text-slate-500 text-sm">Live performance metrics across all assistants.</p>
         </div>
-        <div className="flex items-center gap-2 text-sm text-slate-500 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm w-fit">
-          <span className="font-medium text-slate-700">Last 30 days</span>
+        <div className="flex flex-col items-end gap-2">
+          {/* Preset pill buttons */}
+          <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
+            {DATE_PRESETS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setPreset(key);
+                  if (key !== 'custom') fetchAnalytics(key, customStart, customEnd);
+                }}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  preset === key
+                    ? 'bg-teal-600 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Custom date inputs */}
+          {preset === 'custom' && (
+            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
+              <input
+                type="date"
+                value={customStart}
+                onChange={e => setCustomStart(e.target.value)}
+                className="text-xs text-slate-700 border-none outline-none"
+              />
+              <span className="text-slate-400 text-xs">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={e => setCustomEnd(e.target.value)}
+                className="text-xs text-slate-700 border-none outline-none"
+              />
+              <button
+                onClick={() => fetchAnalytics('custom', customStart, customEnd)}
+                disabled={!customStart || !customEnd}
+                className="ml-1 px-2.5 py-1 bg-teal-600 text-white text-xs rounded-md disabled:opacity-40 hover:bg-teal-700 transition-colors"
+              >
+                Apply
+              </button>
+            </div>
+          )}
           {updatedLabel && (
-            <>
-              <div className="w-1 h-1 rounded-full bg-slate-300"></div>
-              <span>{updatedLabel}</span>
-            </>
+            <span className="text-xs text-slate-400">{updatedLabel}</span>
           )}
         </div>
       </div>
@@ -148,7 +241,7 @@ const Dashboard = () => {
         <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-slate-900">Conversations Over Time</h3>
-            <span className="text-xs text-slate-400">Last 30 days</span>
+            <span className="text-xs text-slate-400">{rangeLabel}</span>
           </div>
           <div className="h-80 w-full">
             {loading ? (
@@ -188,39 +281,67 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Top questions */}
+        {/* Conversation outcomes donut chart */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-6">Top Questions</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Conversation Outcomes</h3>
+          <p className="text-xs text-slate-400 mb-4">How conversations resolved in this period</p>
           {loading ? (
-            <div className="space-y-6">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="space-y-2 animate-pulse">
-                  <div className="h-3 bg-slate-100 rounded w-full"></div>
-                  <div className="h-2 bg-slate-100 rounded w-full"></div>
-                </div>
-              ))}
+            <div className="flex flex-col gap-4 items-center">
+              <div className="w-36 h-36 rounded-full bg-slate-100 animate-pulse" />
+              <div className="space-y-2 w-full">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-3 bg-slate-100 rounded animate-pulse" />
+                ))}
+              </div>
             </div>
-          ) : topQuestions.length === 0 ? (
+          ) : outcomes.length === 0 ? (
             <p className="text-sm text-slate-400 text-center py-8">
-              No questions yet. Conversations will appear here once users start chatting.
+              No conversations in this period yet.
             </p>
           ) : (
-            <div className="space-y-5">
-              {topQuestions.map((item, idx) => (
-                <div key={idx} className="space-y-1.5">
-                  <div className="flex items-start justify-between text-sm gap-3">
-                    <span className="font-medium text-slate-700 leading-snug line-clamp-2">{item.question}</span>
-                    <span className="text-slate-400 font-bold shrink-0">{item.count}</span>
+            <>
+              <div className="h-44">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={outcomes}
+                      dataKey="count"
+                      nameKey="status"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={48}
+                      outerRadius={72}
+                      paddingAngle={3}
+                    >
+                      {outcomes.map((entry, i) => (
+                        <Cell key={i} fill={OUTCOME_COLOURS[entry.status] ?? '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number, name: string) => [`${value} (${outcomeTotal > 0 ? Math.round((value / outcomeTotal) * 100) : 0}%)`, name]}
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Legend */}
+              <div className="space-y-2 mt-2">
+                {outcomes.map((o, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: OUTCOME_COLOURS[o.status] ?? '#94a3b8' }} />
+                      <span className="text-slate-600">{o.status}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-800">{o.count}</span>
+                      <span className="text-slate-400 text-xs w-10 text-right">
+                        {outcomeTotal > 0 ? Math.round((o.count / outcomeTotal) * 100) : 0}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-teal-500 rounded-full"
-                      style={{ width: `${(item.count / maxQuestionCount) * 100}%` }}
-                    ></div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -229,7 +350,7 @@ const Dashboard = () => {
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-semibold text-slate-900">Busiest Hours</h3>
-          <span className="text-xs text-slate-400">Last 30 days — user messages by hour of day</span>
+          <span className="text-xs text-slate-400">{rangeLabel} — user messages by hour of day</span>
         </div>
         <div className="h-56 w-full">
           {loading ? (

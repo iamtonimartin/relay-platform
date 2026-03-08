@@ -88,4 +88,5 @@ export interface AnalyticsData {
   topQuestions: { question: string; count: number }[];
   conversationsOverTime: { date: string; count: number }[];
   busiestHours: { hour: number; label: string; count: number }[];
+  conversationOutcomes: { status: string; count: number }[];
 }

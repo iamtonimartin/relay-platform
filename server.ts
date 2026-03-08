@@ -1662,123 +1662,169 @@ async function startServer() {
     }
   });
 
-  app.get("/api/analytics", async (_req, res) => {
+  app.get("/api/analytics", async (req, res) => {
     try {
-      // Total conversations (all time)
+      // Parse date range from query params — defaults to last 30 days
+      const endDate = req.query.end ? new Date(req.query.end as string) : new Date();
+      endDate.setHours(23, 59, 59, 999);
+      const startDate = req.query.start
+        ? new Date(req.query.start as string)
+        : (() => { const d = new Date(); d.setDate(d.getDate() - 29); d.setHours(0, 0, 0, 0); return d; })();
+
+      const startIso = startDate.toISOString();
+      const endIso = endDate.toISOString();
+
+      // Total conversations in range
       const { count: totalConversations } = await supabase
         .from("conversations")
-        .select("*", { count: "exact", head: true });
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
-      // Total messages sent (user + assistant roles only)
+      // Total messages sent in range (user + assistant only)
       const { count: messagesSent } = await supabase
         .from("messages")
         .select("*", { count: "exact", head: true })
-        .in("role", ["user", "assistant"]);
+        .in("role", ["user", "assistant"])
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
-      // Handoff rate — conversations ever marked handed_off / total
+      // Handoff rate — conversations handed off in range / total in range
       const { count: handoffCount } = await supabase
         .from("conversations")
         .select("*", { count: "exact", head: true })
-        .eq("status", "handed_off");
+        .eq("status", "handed_off")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
-      // Fallback rate — assistant messages flagged as fallbacks / total assistant messages
+      // Fallback rate — fallback assistant messages in range / total assistant messages in range
       const { count: totalAssistantMessages } = await supabase
         .from("messages")
         .select("*", { count: "exact", head: true })
-        .eq("role", "assistant");
+        .eq("role", "assistant")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
       const { count: fallbackCount } = await supabase
         .from("messages")
         .select("*", { count: "exact", head: true })
         .eq("role", "assistant")
-        .eq("is_fallback", true);
+        .eq("is_fallback", true)
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
       const total = totalConversations ?? 0;
       const handoffRate =
-        total > 0
-          ? Math.round(((handoffCount ?? 0) / total) * 1000) / 10
-          : 0;
+        total > 0 ? Math.round(((handoffCount ?? 0) / total) * 1000) / 10 : 0;
 
       const totalAsst = totalAssistantMessages ?? 0;
       const fallbackRate =
-        totalAsst > 0
-          ? Math.round(((fallbackCount ?? 0) / totalAsst) * 1000) / 10
-          : 0;
+        totalAsst > 0 ? Math.round(((fallbackCount ?? 0) / totalAsst) * 1000) / 10 : 0;
 
-      // Top questions — most frequent user messages (verbatim, last 1000 messages)
+      // Lead capture rate — conversations with a captured lead / total in range
+      const { count: leadCount } = await supabase
+        .from("conversations")
+        .select("*", { count: "exact", head: true })
+        .or("user_name.not.is.null,user_email.not.is.null")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
+
+      const leadCaptureRate =
+        total > 0 ? Math.round(((leadCount ?? 0) / total) * 1000) / 10 : 0;
+
+      // Conversation outcomes — breakdown of statuses in range
+      const { data: outcomeRows } = await supabase
+        .from("conversations")
+        .select("status")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
+
+      const outcomeCounts: Record<string, number> = { active: 0, handed_off: 0, closed: 0, archived: 0 };
+      for (const row of outcomeRows ?? []) {
+        if (row.status in outcomeCounts) outcomeCounts[row.status]++;
+      }
+      const conversationOutcomes = [
+        { status: "Active",      count: outcomeCounts.active },
+        { status: "Handed Off",  count: outcomeCounts.handed_off },
+        { status: "Closed",      count: outcomeCounts.closed },
+        { status: "Archived",    count: outcomeCounts.archived },
+      ].filter(o => o.count > 0);
+
+      // Top questions — kept for per-assistant analytics tab compatibility
       const { data: userMessages } = await supabase
         .from("messages")
         .select("content")
         .eq("role", "user")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso)
         .order("created_at", { ascending: false })
         .limit(1000);
 
       const questionCounts: Record<string, number> = {};
       for (const msg of userMessages ?? []) {
         const q = msg.content.trim();
-        if (q.length < 200) { // Ignore very long messages — unlikely to be repeated questions
-          questionCounts[q] = (questionCounts[q] || 0) + 1;
-        }
+        if (q.length < 200) questionCounts[q] = (questionCounts[q] || 0) + 1;
       }
       const topQuestions = Object.entries(questionCounts)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 5)
         .map(([question, count]) => ({ question, count }));
 
-      // Conversations over time — last 30 days, grouped by date
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-      thirtyDaysAgo.setHours(0, 0, 0, 0);
-
+      // Conversations over time — hourly if range is <= 1 day, otherwise daily
       const { data: recentConvs } = await supabase
         .from("conversations")
         .select("created_at")
-        .gte("created_at", thirtyDaysAgo.toISOString());
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
-      // Build a map of date -> count
-      const dateCounts: Record<string, number> = {};
-      for (const conv of recentConvs ?? []) {
-        const date = conv.created_at.split("T")[0];
-        dateCounts[date] = (dateCounts[date] || 0) + 1;
+      const diffDays = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24);
+      let conversationsOverTime: { date: string; count: number }[];
+
+      if (diffDays <= 1) {
+        // Hourly buckets for "Today"
+        const hourCounts: Record<number, number> = {};
+        for (let h = 0; h < 24; h++) hourCounts[h] = 0;
+        for (const conv of recentConvs ?? []) {
+          hourCounts[new Date(conv.created_at).getHours()]++;
+        }
+        conversationsOverTime = Array.from({ length: 24 }, (_, h) => ({
+          date: `${String(h).padStart(2, "0")}:00`,
+          count: hourCounts[h],
+        }));
+      } else {
+        // Daily buckets — fill every day in the range with no gaps
+        const dateCounts: Record<string, number> = {};
+        for (const conv of recentConvs ?? []) {
+          const d = conv.created_at.split("T")[0];
+          dateCounts[d] = (dateCounts[d] || 0) + 1;
+        }
+        conversationsOverTime = [];
+        const cursor = new Date(startDate);
+        cursor.setHours(0, 0, 0, 0);
+        while (cursor <= endDate) {
+          const dateStr = cursor.toISOString().split("T")[0];
+          conversationsOverTime.push({ date: dateStr, count: dateCounts[dateStr] || 0 });
+          cursor.setDate(cursor.getDate() + 1);
+        }
       }
 
-      // Fill all 30 days so the chart has no gaps
-      const conversationsOverTime: { date: string; count: number }[] = [];
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split("T")[0];
-        conversationsOverTime.push({ date: dateStr, count: dateCounts[dateStr] || 0 });
-      }
-
-      // Lead capture rate — conversations where a lead was captured (name or email present) / total
-      const { count: leadCount } = await supabase
-        .from("conversations")
-        .select("*", { count: "exact", head: true })
-        .or("user_name.not.is.null,user_email.not.is.null");
-
-      const leadCaptureRate =
-        total > 0
-          ? Math.round(((leadCount ?? 0) / total) * 1000) / 10
-          : 0;
-
-      // Busiest hours — message volume by hour of day (last 30 days)
+      // Busiest hours — message volume by hour of day in range
       const { data: recentMessages } = await supabase
         .from("messages")
         .select("created_at")
-        .gte("created_at", thirtyDaysAgo.toISOString())
-        .in("role", ["user"]);
+        .eq("role", "user")
+        .gte("created_at", startIso)
+        .lte("created_at", endIso);
 
       const hourCounts: Record<number, number> = {};
       for (let h = 0; h < 24; h++) hourCounts[h] = 0;
       for (const msg of recentMessages ?? []) {
-        const hour = new Date(msg.created_at).getHours();
-        hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+        hourCounts[new Date(msg.created_at).getHours()]++;
       }
-      const busiestHours = Object.entries(hourCounts).map(([hour, count]) => ({
-        hour: parseInt(hour),
-        label: `${String(parseInt(hour)).padStart(2, "0")}:00`,
-        count,
+      const busiestHours = Array.from({ length: 24 }, (_, h) => ({
+        hour: h,
+        label: `${String(h).padStart(2, "0")}:00`,
+        count: hourCounts[h],
       }));
 
       res.json({
@@ -1790,6 +1836,7 @@ async function startServer() {
         topQuestions,
         conversationsOverTime,
         busiestHours,
+        conversationOutcomes,
       });
     } catch (err: any) {
       console.error("Analytics error:", err);
